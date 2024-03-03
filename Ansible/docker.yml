@@ -1,0 +1,101 @@
+- name: ysi_docker
+  hosts: localhost
+  tasks:
+    - name: Get dev_one IP Address
+      shell: 'terraform output ysi_docker | tr -d \" '
+      args:
+        chdir: /home/ubuntu/project/development-enviornment/Terraform
+      register: ysi_docker
+
+    - name: Add host to dynamic group
+      add_host:
+        name: "{{ ysi_docker.stdout }}"
+        groups: dynamic_hosts
+
+    - name: Wait for SSH to become available
+      wait_for:
+        host: "{{ ysi_docker.stdout }}"
+        port: 22
+        delay: 10
+        timeout: 120
+
+- name: Dynamic hosts
+  hosts: dynamic_hosts
+  vars:
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
+    users_with_sudo:
+      - bob
+      - alice
+      - janet
+      - tim
+  become: true
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+
+    - name: Install prerequisites for Docker
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg-agent
+          - software-properties-common
+        state: present
+
+    - name: Add Docker GPG key
+      apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+
+    - name: Add Docker APT repository
+      apt_repository:
+        repo: deb [arch=amd64] https://download.docker.com/linux/ubuntu jammy stable
+        state: present
+
+    - name: Update apt package cache (again)
+      apt:
+        update_cache: yes
+
+    - name: Install Docker
+      apt:
+        name: docker-ce
+        state: present
+
+    - name: Ensure Docker service is running and enabled
+      service:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Create users
+      user:
+        name: "{{ item }}"
+        password: "$6$nfvMQSydd0CJkr78$m0vk34XmulmuhFlSK3INneva0MY2QcEf8H2VNvA6RXflE9gJVHMqyysbX6.daNCFLyEo5xF0lxuMxsBytcxPR1"
+        state: present
+      loop: "{{ users_with_sudo }}"
+      
+    - name: Ensure users have sudo access
+      lineinfile:
+        dest: /etc/sudoers
+        state: present
+        regexp: '^{{ item }}\s'
+        line: '{{ item }} ALL=(ALL) NOPASSWD: ALL'
+      loop: '{{ users_with_sudo }}'
+      become: yes
+      become_method: 'sudo'
+
+    - name: Create developers group
+      group:
+        name: developers
+        state: present
+
+    - name: Add users to developers group
+      user:
+        name: "{{ item }}"
+        groups: developers
+        append: yes
+      loop:
+        - tim
+        - janet
